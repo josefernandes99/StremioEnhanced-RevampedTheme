@@ -1,3 +1,10 @@
+/**
+ * @name Theme
+ * @description Theme.
+ * @version 1.0.0
+ * @author Fxy
+ */
+
 /* Netflix-style carousel │ 6-Jun-2025 – no network, no flash */
 (() => {
   if (window.__netflixCarouselInjected) return;
