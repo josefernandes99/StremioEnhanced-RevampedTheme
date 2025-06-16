@@ -1045,7 +1045,7 @@ html, body, #app {
   right: 0;
 }
 
-/* ── Netflix-style 3.5-item carousel ── */
+/* ── Netflix-style 4.5-item carousel ── */
 .meta-items-container-qcuUA {
   display: flex !important;
   overflow-x: hidden !important;
@@ -1060,10 +1060,10 @@ html, body, #app {
   overflow-x: auto !important;
 }
 
-/* size each cover to exactly 1/3.5 of the container width */
+/* size each cover to exactly 1/4.5 of the container width */
 .meta-items-container-qcuUA > * {
-  flex: 0 0 calc(100% / 3.5) !important;
-  max-width: calc(100% / 3.5) !important;
+  flex: 0 0 calc(100% / 4.5) !important;
+  max-width: calc(100% / 4.5) !important;
   margin-right: 1rem !important;
   scroll-snap-align: start;
 }
@@ -1078,7 +1078,7 @@ html, body, #app {
   display: none !important;
 }
 
-/* ─── 3.5-item Netflix-style carousel ───────────────────────────────── */
+/* ─── 4.5-item Netflix-style carousel ───────────────────────────────── */
 
 /* container */
 .cf-carousel {
@@ -1088,10 +1088,10 @@ html, body, #app {
   scroll-snap-type: x mandatory;
 }
 
-/* each cover = 100%/3.5 of row */
+/* each cover = 100%/4.5 of row */
 .cf-carousel > * {
-  flex:       0 0 calc(100% / 3.5) !important;
-  max-width:  calc(100% / 3.5) !important;
+  flex:       0 0 calc(100% / 4.5) !important;
+  max-width:  calc(100% / 4.5) !important;
   margin-right: 1rem !important;
   scroll-snap-align: start;
 }
@@ -1378,6 +1378,7 @@ html, body, #app {
 /* IMDb logo / rating badge already uses --color-imdb token – leave untouched */
 :root{
   --color-imdb:#f5c518;               /* unchanged yellow */
+  --color-rt:#fa320a;
 }
 
 /* 3.  Ensure images / video thumbnails stay full-colour */

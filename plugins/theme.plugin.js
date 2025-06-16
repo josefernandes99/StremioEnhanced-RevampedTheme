@@ -89,7 +89,7 @@
       container.style.overflow='hidden';
       container.style.scrollBehavior='auto';
 
-      let viewW=0,pages=1,current=0,maxShift=0;
+      let viewW=0,pages=1,current=0,maxShift=0,stepW=0;
       let built=false,prev,next,dots;
 
       const update=()=>{
@@ -108,7 +108,7 @@
         }
       };
       const snap=(anim=true)=>{
-        const tgt=Math.min(current*viewW,maxShift);
+        const tgt=Math.min(current*stepW,maxShift);
         if(!anim){track.style.transform=`translateX(${-tgt}px)`;return;}
         const from=parseFloat(track.style.transform.replace(/[^-0-9.]/g,''))||0;
         const diff=-tgt-from,start=performance.now();
@@ -165,6 +165,7 @@
         viewW=container.clientWidth;
         maxShift=Math.max(0,track.scrollWidth-viewW);
         pages=viewW?Math.ceil(track.scrollWidth/viewW):1;
+        stepW = pages>1 ? maxShift/(pages-1) : 0;
         current=Math.min(current,pages-1);
         if(pages>1)buildCtrls();
         rebuild();update();snap(false);

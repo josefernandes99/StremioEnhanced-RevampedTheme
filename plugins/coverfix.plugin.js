@@ -41,10 +41,27 @@
   const looksPoster = u => /poster|small/i.test(u);
   const stripTitle  = s => s
     .replace(/\([^)]*\)|"[^"]*"/g,'')
-    .replace(/season\s*\d+|part\s*\d+|cour\s*\d+|arc|hen|shou/ig,'')
+    .replace(/\b(?:season\s*\d+|part\s*\d+|cour\s*\d+|arc|hen|shou|anime)\b/ig,'')
     .replace(/\b[1-9](st|nd|rd|th)\b/ig,'')
     .replace(/[:\-–].*$/,'').replace(/\s{2,}/g,' ').trim();
-  const variants    = t => [...new Set([t.trim(), stripTitle(t)].filter(Boolean))];
+  const TITLE_ALIASES = {
+    'arcane season 2': 'arcane',
+    'enen no shouboutai: san no shou': 'fire force',
+    'fire force season 3': 'fire force',
+    'suponjibobu anime': 'spongebob squarepants',
+    'suponjibobu': 'spongebob squarepants'
+  };
+  const aliasTitle = t => TITLE_ALIASES[t.toLowerCase()] || t;
+  const variants    = t => {
+    const trimmed  = t.trim();
+    const stripped = stripTitle(trimmed);
+    const set = new Set([trimmed, stripped]);
+    const a1 = aliasTitle(trimmed);
+    const a2 = aliasTitle(stripped);
+    if(a1) set.add(a1);
+    if(a2) set.add(a2);
+    return [...set].filter(Boolean);
+  };
   const heuristic   = u => {
     if (!u) return u;
     if (u.includes('media.kitsu.app')||u.includes('/background/')) return u;
@@ -61,6 +78,16 @@
   const tmdbCache  = new Map();
   const metaCache  = new Map();
   const kitsuCache = new Map();
+
+  function extractImdb(card, img){
+    const href = card?.querySelector('a[href*="/detail/"]')?.href || '';
+    const m1 = href.match(/tt\d{7,}/);
+    if(m1) return m1[0];
+    const src = img?.src || '';
+    const m2 = src.match(/tt\d{7,}/);
+    if(m2) return m2[0];
+    return null;
+  }
 
   // ── TMDB SEARCH / DETAILS / IMAGES ───────────────────────────────
   async function tmdbSearch(q, page=1){
@@ -101,6 +128,52 @@
     const j   = await fetch(url).then(r=>r.ok?r.json():{backdrops:[]});
     return (j.backdrops||[]).map(b=>`https://image.tmdb.org/t/p/original${b.file_path}`);
   }
+  async function tmdbAltTitles(id,type){
+    const key = `alt:${type}:${id}`;
+    if (tmdbCache.has(key)) return tmdbCache.get(key);
+    try {
+      const alt = await fetch(
+        `https://api.themoviedb.org/3/${type}/${id}/alternative_titles?api_key=${TMDB_KEY}`
+      ).then(r=>r.ok?r.json():{});
+      const arr = alt.titles||alt.results||[];
+      const list = [];
+      for(const t of arr){
+        if(t && t.title) list.push(t.title);
+      }
+      const tr = await fetch(
+        `https://api.themoviedb.org/3/${type}/${id}/translations?api_key=${TMDB_KEY}`
+      ).then(r=>r.ok?r.json():{});
+      for(const t of tr.translations||[]){
+        if(t?.data?.name) list.push(t.data.name);
+      }
+      const uniq = [...new Set(list.filter(Boolean))];
+      tmdbCache.set(key, uniq);
+      return uniq;
+    } catch(e){
+      console.warn('CoverFix: tmdbAltTitles failed', e);
+      tmdbCache.set(key, []);
+      return [];
+    }
+  }
+
+  async function imdbSuggest(q){
+    const key = `imdb:${q.toLowerCase()}`;
+    if (imdbCache.has(key)) return imdbCache.get(key);
+    const first = q.trim()[0];
+    if(!first){ imdbCache.set(key,null); return null; }
+    try {
+      const url = `https://v2.sg.media-imdb.com/suggestion/${first}/${encodeURIComponent(q)}.json`;
+      const j   = await fetch(url).then(r=>r.ok?r.json():{});
+      const d   = j?.d && j.d[0];
+      const res = d ? { id:d.id||null, image:d.i?.imageUrl||null } : null;
+      imdbCache.set(key,res);
+      return res;
+    } catch(e){
+      console.warn('CoverFix: imdbSuggest failed', e);
+      imdbCache.set(key,null);
+      return null;
+    }
+  }
 
   // ── CINEMETA & KITSU ──────────────────────────────────────────────
   async function metaBg(id,type){
@@ -132,6 +205,26 @@
       kitsuCache.set(id,[]);
     }
     return kitsuCache.get(id);
+  }
+
+  async function imdbSuggest(title){
+    const q = stripTitle(title);
+    if(!q) return {id:null,image:null};
+    const key = `sug:${q.toLowerCase()}`;
+    if(imdbCache.has(key)) return imdbCache.get(key);
+    try {
+      const first = encodeURIComponent(q)[0].toLowerCase();
+      const url = `https://v2.sg.media-imdb.com/suggestion/${first}/${encodeURIComponent(q)}.json`;
+      const j   = await fetch(url).then(r=>r.ok?r.json():{});
+      const d   = j.d && j.d[0];
+      const out = { id:d?.id||null, image:d?.i?.imageUrl||null };
+      imdbCache.set(key,out);
+      return out;
+    } catch(e){
+      console.warn('CoverFix: imdbSuggest failed', e);
+      imdbCache.set(key,{id:null,image:null});
+      return {id:null,image:null};
+    }
   }
 
   // ── FIND / APPLY COVER (initial load) ────────────────────────────
@@ -170,11 +263,15 @@
     const used = new Set(entry.history);
 
     // fetch data
-    const results = await tmdbSearch(title,1);
+    let results = [];
+    for(const v of variants(title)){
+      results = await tmdbSearch(v,1);
+      if(results.length) break;
+    }
     const top3    = results.slice(0,3);
     const details = await Promise.all(top3.map(h=> tmdbDetails(h.id,h.media_type,h.backdrop_path)));
     const images  = await Promise.all(top3.map(h=> tmdbImages(h.id,h.media_type)));
-    const href    = el.closest('a[href*="/detail/"]')?.href||'';
+    const altNames= await Promise.all(top3.map(h=> tmdbAltTitles(h.id,h.media_type)));
     const m       = href.match(/detail\/([^/]+)\/([^/#?]+)/);
     const cm      = m ? { type:m[1], id:m[2] } : null;
     const km      = src.match(/kitsu:(\d+)/);
@@ -198,6 +295,25 @@
         }
         return null;
       }),
+      ...altNames.flat().slice(0,3).map(v=>async()=>{
+        for(const vv of variants(v)){
+          const sr=await tmdbSearch(vv,1);
+          if(sr[0]){
+            const dt=await tmdbDetails(sr[0].id,sr[0].media_type,sr[0].backdrop_path);
+            if(dt.backdrop) return dt.backdrop;
+          }
+        }
+        return null;
+      }),
+      async()=>{
+        for(const v of variants(title)){
+          const s=await imdbSuggest(v);
+          if(s){
+            return s.image || (s.id?`https://images.metahub.space/background/medium/${s.id}/img`:null);
+          }
+        }
+        return null;
+      },
       async()=> src,
       async()=> placeholder
     ];
@@ -286,6 +402,10 @@
     <div id="coverfix-next" class="cf-item"
          style="padding:6px 12px;cursor:pointer;">
       Next Cover
+    </div>
+    <div id="coverfix-imdb" class="cf-item"
+         style="padding:6px 12px;cursor:pointer;">
+      Show IMDb
     </div>`;
   document.body.appendChild(menu);
 
@@ -301,7 +421,8 @@
                       ?.textContent?.trim()||'<unknown>';
     console.log('CoverFix: contextmenu on', title,'imgEl=',imgEl);
     if(!imgEl) return;
-    currentTarget={el:imgEl,title};
+    const imdb = extractImdb(card,imgEl);
+    currentTarget={el:imgEl,title,imdb};
     const hist=histories[title],prev=menu.querySelector('#coverfix-prev');
     if(!hist||hist.idx<=0){
       prev.classList.add('disabled');prev.style.opacity='.5';prev.style.cursor='default';
@@ -324,6 +445,12 @@
     const el=currentTarget.el;
     const src=el.tagName==='IMG'?el.src:(el.style.backgroundImage||'').slice(5,-2);
     await loadNewCover(el,src,currentTarget.title);
+    hideMenu();
+  });
+  menu.querySelector('#coverfix-imdb').addEventListener('click',()=>{
+    if(!currentTarget) return;
+    if(currentTarget.imdb)
+      window.open(`https://www.imdb.com/title/${currentTarget.imdb}/`,'_blank');
     hideMenu();
   });
 

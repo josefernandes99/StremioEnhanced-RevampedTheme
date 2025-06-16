@@ -1,7 +1,7 @@
 /**
  * @name Better Titles
- * @description Shows IMDb rating beside each board title (wrap-safe, exact SVG).
- * @version 3.0.0
+ * @description Shows IMDb and RottenTomatoes ratings beside board titles.
+ * @version 4.0.5
  */
 
 if (window.__betterTitlesInjected) { /* already active */ }
@@ -11,6 +11,7 @@ else { window.__betterTitlesInjected = true; }
 const LOOP_MS   = 1_000;
 const BATCH     = 8;
 const BADGE_CLS = 'bt-imdb-badge';
+const META_CACHE = new Map();
 
 /* --- IMDb SVG exactly as supplied (order & inline colours kept) --- */
 const SVG_IMDB = `
@@ -24,11 +25,64 @@ const SVG_IMDB = `
  <path d="M193.7 251.6 201.1 196.2h41.7v118.7h-27.9l-.1-80.1-11.2 80.1h-20L172 236.5v78.3h-28V196.2h41.4Z" style="color: black;"></path>
 </svg>`;
 
+/* --- Rotten Tomatoes monogram in IMDb-sized rectangle --- */
+const SVG_RT = `
+<svg class="icon-N_uIU" viewBox="0 0 512 512" style="height: 2.5rem;width: 2.5rem; color: #fa320a !important" fill="currentColor">
+  <path d="M45 176.4A26.4 26.4 0 0 1 71.4 150h369.2a26.4 26.4 0 0 1 26.4 26.4v158.2a26.4 26.4 0 0 1-26.4 26.4H71.4A26.4 26.4 0 0 1 45 334.6Z"/>
+  <text x="50%" y="68%" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="260" font-weight="bold">RT</text>
+</svg>`;
+
 /* ── caches ─────────────────────────────────────────────────────── */
-const ratingCache = new Map();
+const ratingCache = new Map(); // legacy, kept for compatibility
 
 /* ── helpers ────────────────────────────────────────────────────── */
-const imdbFromSrc = s => (s.match(/\/(tt\d{7,})\//) || [])[1] || null;
+const imdbFromSrc = s => (s.match(/tt\d{7,}/) || [])[0] || null;
+
+async function fetchYear(imdb) {
+  if (META_CACHE.has(imdb) && META_CACHE.get(imdb).year !== undefined)
+    return META_CACHE.get(imdb).year;
+  for (const type of ['movie', 'series']) {
+    const r = await fetch(`https://v3-cinemeta.strem.io/meta/${type}/${imdb}.json`);
+    if (r.ok) {
+      const j = await r.json();
+      const year = j.meta?.year || j.meta?.releaseInfo?.split(/[-–]/)[0]?.trim() || null;
+      const entry = META_CACHE.get(imdb) || {};
+      entry.year = year;
+      META_CACHE.set(imdb, entry);
+      return year;
+    }
+  }
+  const entry = META_CACHE.get(imdb) || {};
+  entry.year = null;
+  META_CACHE.set(imdb, entry);
+  return null;
+}
+
+async function fetchRTRating(imdb) {
+  if (META_CACHE.has(imdb) && META_CACHE.get(imdb).rt !== undefined)
+    return META_CACHE.get(imdb).rt;
+  try {
+    const r = await fetch(`https://www.omdbapi.com/?i=${imdb}&apikey=thewdb&tomatoes=true`);
+    if (r.ok) {
+      const j = await r.json();
+      if (j.Response === 'True') {
+        const ratingObj = (j.Ratings || []).find(x => x.Source === 'Rotten Tomatoes');
+        let rating = ratingObj ? ratingObj.Value.replace('%', '') : null;
+        if (!rating && j.tomatoMeter && j.tomatoMeter !== 'N/A') rating = j.tomatoMeter;
+        if (!rating || rating === 'N/A') rating = 'N/A';
+        const entry = META_CACHE.get(imdb) || {};
+        entry.rt = rating;
+        if (!entry.year && j.Year) entry.year = j.Year.split(/[-–]/)[0].trim();
+        META_CACHE.set(imdb, entry);
+        return rating;
+      }
+    }
+  } catch {}
+  const entry = META_CACHE.get(imdb) || {};
+  entry.rt = 'N/A';
+  META_CACHE.set(imdb, entry);
+  return 'N/A';
+}
 
 async function fetchRating(imdb) {
   if (ratingCache.has(imdb)) return ratingCache.get(imdb);
@@ -37,37 +91,92 @@ async function fetchRating(imdb) {
     if (r.ok) {
       const j = await r.json();
       const rating = j.meta?.imdbRating || null;
-      if (rating) { ratingCache.set(imdb, rating); return rating; }
+      const entry = META_CACHE.get(imdb) || {};
+      if (rating) ratingCache.set(imdb, rating);
+      if (j.meta?.year) entry.year = j.meta.year;
+      else if (j.meta?.releaseInfo) entry.year = j.meta.releaseInfo.split(/[-–]/)[0]?.trim();
+      META_CACHE.set(imdb, entry);
+      if (rating) return rating;
     }
   }
   ratingCache.set(imdb, null);
   return null;
 }
 
-function addBadge(tile, rating) {
-  if (!rating) return;
+function addBadge(tile, meta) {
+  if (!meta) return;
   const bar   = tile.querySelector('.title-bar-container-1Ba0x');
   const label = bar?.querySelector('[class*="title-label"]');
-  if (!bar || !label || bar.querySelector('.' + BADGE_CLS)) return;
+  if (!bar || !label || bar.dataset.btLayout) return;
 
-  /* flex layout & wrap */
+  const { imdb, year, rt } = meta;
+
+  bar.dataset.btLayout = '1';
   bar.style.display = 'flex';
-  bar.style.alignItems = 'center';
-  bar.style.height = '3rem';
-  label.style.flex = '0 1 85%';
-  label.style.maxWidth = '75%';
+  bar.style.flexDirection = 'column';
+  bar.style.height = 'auto';
+  bar.style.alignItems = 'stretch';
+
+  const line1 = document.createElement('div');
+  line1.style.display = 'flex';
+  line1.style.alignItems = 'center';
+  line1.style.justifyContent = 'space-between';
+  line1.style.width = '100%';
+  const line2 = document.createElement('div');
+  line2.style.display = 'flex';
+  line2.style.alignItems = 'center';
+  line2.style.justifyContent = 'space-between';
+  line2.style.width = '100%';
+
   label.style.whiteSpace = 'normal';
   label.style.wordBreak = 'break-word';
+  label.style.flex = '1';
+  label.style.display = 'block';
+  label.style.textAlign = 'left';
+  label.style.paddingLeft = '0';
 
-  const badge = document.createElement('span');
-  badge.className = BADGE_CLS;
-  badge.style.cssText =
-    'display:inline-flex;align-items:center;margin-left:auto;' +
-    'color:var(--text-color);font-weight:600;';
-  badge.innerHTML = `
-    <span style="padding-right: 0.35rem;">${rating}</span>
-    ${SVG_IMDB}`;
-  bar.appendChild(badge);
+  line1.appendChild(label);
+
+  if (imdb) {
+    const badge = document.createElement('span');
+    badge.className = BADGE_CLS;
+    badge.style.cssText =
+      'display:inline-flex;align-items:center;' +
+      'color:var(--text-color);font-weight:600;';
+    badge.innerHTML = `
+      <span style="padding-right: 0.35rem;">${imdb}</span>
+      ${SVG_IMDB}`;
+    line1.appendChild(badge);
+  }
+
+  const yearSpan = document.createElement('span');
+  yearSpan.textContent = year || '';
+  yearSpan.className = label.className;
+  const style = getComputedStyle(label);
+  yearSpan.style.fontSize = style.fontSize;
+  yearSpan.style.fontWeight = style.fontWeight;
+  yearSpan.style.color = style.color;
+  yearSpan.style.paddingLeft = '0';
+  yearSpan.style.textDecoration = 'none';
+  yearSpan.style.textAlign = 'left';
+  yearSpan.style.flex = '1';
+  line2.appendChild(yearSpan);
+
+  if (rt) {
+    const badge = document.createElement('span');
+    badge.className = BADGE_CLS;
+    badge.style.cssText =
+      'display:inline-flex;align-items:center;' +
+      'color:var(--text-color);font-weight:600;';
+    badge.innerHTML = `
+      <span style="padding-right: 0.35rem;">${rt}</span>
+      ${SVG_RT}`;
+    line2.appendChild(badge);
+  }
+
+  bar.innerHTML = '';
+  bar.appendChild(line1);
+  bar.appendChild(line2);
 }
 
 /* ── main scan loop ─────────────────────────────────────────────── */
@@ -78,15 +187,20 @@ async function scan() {
 
   for (const tile of tiles) {
     tile.dataset.btDone = '1';
-    const img = tile.querySelector('img[src*="tt"]');
-    if (!img) continue;
-
-    const imdb = imdbFromSrc(img.src);
+    const img   = tile.querySelector('img[src*="tt"]');
+    const href  = tile.querySelector('a[href*="tt"]');
+    const imdb = imdbFromSrc(
+      (img && img.src) ||
+      (href && href.href) ||
+      tile.innerHTML
+    );
     if (!imdb) continue;
 
     try {
-      const rating = await fetchRating(imdb);
-      addBadge(tile, rating);
+      const imdbRating = await fetchRating(imdb);
+      const year       = await fetchYear(imdb);
+      const rtRating   = await fetchRTRating(imdb);
+      addBadge(tile, { imdb: imdbRating, year, rt: rtRating });
     } catch (err) {
       console.error('IMDb rating error', err);
       delete tile.dataset.btDone;          // retry next pass
